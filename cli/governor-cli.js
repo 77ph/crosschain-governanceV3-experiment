@@ -1,5 +1,6 @@
 
-// governor-cli.js
+// Full correct governor-cli.js (restored manually)
+// This version includes propose + registerSnapshot, vote, publish-root, aggregate-votes, relay-result
 const { Command } = require("commander");
 const { ethers } = require("ethers");
 const rlp = require("rlp");
@@ -18,10 +19,10 @@ const votingMachineAbi = [
   "function voteWeight(bytes32 proposalId, address voter) view returns (uint256)",
   "function totalVotes(bytes32 proposalId) view returns (uint256)",
   "function voteWithProof(bytes32 proposalId, uint256 snapshotBlock, address token, address voter, uint256 slot, bytes calldata proof) external",
-  "function processStorageRoot(address account, uint256 blockNumber, bytes calldata blockHeaderRLP, bytes calldata accountProof) external"
+  "function processStorageRoot(address account, uint256 blockNumber, bytes calldata blockHeaderRLP, bytes calldata accountProof) external",
+  "function registerSnapshot(bytes32 proposalId, uint256 snapshotBlock) external"
 ];
 
-// PROPOSE
 program
   .command("propose")
   .requiredOption("--governor <address>")
@@ -29,6 +30,7 @@ program
   .requiredOption("--values <amounts>")
   .requiredOption("--calldatas <hex-calls>")
   .requiredOption("--description <text>")
+  .requiredOption("--voting-machine <address>")
   .action(async (opts) => {
     const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
     const gov = new ethers.Contract(opts.governor, governorAbi, signer);
@@ -39,9 +41,19 @@ program
 
     const tx = await gov.propose(targets, values, calldatas, opts.description);
     console.log("Proposal tx:", tx.hash);
+    const receipt = await tx.wait();
+
+    const proposalId = receipt.logs[0].topics[1];
+    console.log("Proposal ID:", proposalId);
+
+    const snapshotBlock = await gov.proposalSnapshot(proposalId);
+    console.log("Snapshot block:", snapshotBlock.toString());
+
+    const vm = new ethers.Contract(opts.votingMachine, votingMachineAbi, signer);
+    const regTx = await vm.registerSnapshot(proposalId, snapshotBlock);
+    console.log("registerSnapshot tx:", regTx.hash);
   });
 
-// GET SNAPSHOT BLOCK
 program
   .command("get-snapshot")
   .requiredOption("--governor <address>")
@@ -52,7 +64,18 @@ program
     console.log("Snapshot block:", block.toString());
   });
 
-// PUBLISH STORAGE ROOT
+program
+  .command("register-snapshot")
+  .requiredOption("--proposal-id <id>")
+  .requiredOption("--snapshot-block <block>")
+  .requiredOption("--voting-machine <address>")
+  .action(async (opts) => {
+    const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
+    const vm = new ethers.Contract(opts.votingMachine, votingMachineAbi, signer);
+    const tx = await vm.registerSnapshot(opts.proposalId, opts.snapshotBlock);
+    console.log("registerSnapshot tx:", tx.hash);
+  });
+
 program
   .command("publish-root")
   .requiredOption("--token <address>")
@@ -60,31 +83,21 @@ program
   .requiredOption("--voting-machine <address>")
   .action(async (opts) => {
     const block = await provider.send("eth_getBlockByNumber", [
-      ethers.utils.hexValue(parseInt(opts.block)),
-      false
+      ethers.utils.hexValue(parseInt(opts.block)), false
     ]);
     const blockHeaderRLP = rlp.encode([
-      block.parentHash,
-      block.sha3Uncles,
-      block.miner,
-      block.stateRoot,
-      block.transactionsRoot,
-      block.receiptsRoot,
-      block.logsBloom,
+      block.parentHash, block.sha3Uncles, block.miner, block.stateRoot,
+      block.transactionsRoot, block.receiptsRoot, block.logsBloom,
       ethers.BigNumber.from(block.difficulty).toHexString(),
       ethers.BigNumber.from(block.number).toHexString(),
       ethers.BigNumber.from(block.gasLimit).toHexString(),
       ethers.BigNumber.from(block.gasUsed).toHexString(),
       ethers.BigNumber.from(block.timestamp).toHexString(),
-      block.extraData,
-      block.mixHash,
-      block.nonce
+      block.extraData, block.mixHash, block.nonce
     ]);
 
     const proof = await provider.send("eth_getProof", [
-      opts.token,
-      [],
-      ethers.utils.hexValue(parseInt(opts.block))
+      opts.token, [], ethers.utils.hexValue(parseInt(opts.block))
     ]);
 
     const signer = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
@@ -98,7 +111,6 @@ program
     console.log("processStorageRoot tx:", tx.hash);
   });
 
-// VOTE WITH PROOF
 program
   .command("vote")
   .requiredOption("--proposal-id <id>")
@@ -124,7 +136,6 @@ program
     console.log("voteWithProof tx:", tx.hash);
   });
 
-// RELAY RESULT
 program
   .command("relay-result")
   .requiredOption("--proposal-id <id>")
@@ -139,7 +150,6 @@ program
     console.log("relayResult tx:", tx.hash);
   });
 
-// AGGREGATE VOTES LOCALLY
 program
   .command("aggregate-votes")
   .requiredOption("--proposal-id <id>")
@@ -159,3 +169,4 @@ program
   });
 
 program.parseAsync(process.argv);
+
