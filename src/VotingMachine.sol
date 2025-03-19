@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -23,6 +22,7 @@ contract VotingMachine {
     mapping(address => mapping(uint256 => bytes32)) public storageRoots;
     mapping(bytes32 => mapping(address => bool)) public hasVoted;
     mapping(bytes32 => mapping(address => uint256)) public voteWeight;
+    mapping(bytes32 => uint256) public proposalSnapshots;
 
     uint8 constant ACCOUNT_STORAGE_ROOT_INDEX = 2;
 
@@ -34,6 +34,11 @@ contract VotingMachine {
         wormholeRelayer = _relayer;
         targetChainId = _targetChainId;
         l1ReceiverAddress = _l1Receiver;
+    }
+
+    function registerSnapshot(bytes32 proposalId, uint256 snapshotBlock) external {
+        require(proposalSnapshots[proposalId] == 0, "Snapshot already set");
+        proposalSnapshots[proposalId] = snapshotBlock;
     }
 
     function processStorageRoot(
@@ -69,6 +74,8 @@ contract VotingMachine {
         bytes memory storageProof
     ) external {
         require(!hasVoted[proposalId][voter], "Already voted");
+        require(snapshotBlock == proposalSnapshots[proposalId], "Snapshot mismatch");
+
         bytes32 storageRoot = storageRoots[token][snapshotBlock];
         require(storageRoot != bytes32(0), "Storage root not available");
 
@@ -89,7 +96,9 @@ contract VotingMachine {
         for (uint256 i = 0; i < voters.length; i++) {
             total += voteWeight[proposalId][voters[i]];
         }
+
         bytes memory payload = abi.encode(proposalId, total);
+
         IWormholeRelayer(wormholeRelayer).sendPayloadToEvm{value: msg.value}(
             targetChainId,
             l1ReceiverAddress,
@@ -102,6 +111,6 @@ contract VotingMachine {
     function getStateRootFromHeader(bytes memory rlp, bytes32 expectedHash) public pure returns (bytes32) {
         require(keccak256(rlp) == expectedHash, "Header hash mismatch");
         RLPReader.RLPItem[] memory header = rlp.toRLPItem().toList();
-        return bytes32(header[3].toUint()); // index 3 = stateRoot
+        return bytes32(header[3].toUint());
     }
 }
