@@ -36,34 +36,33 @@ contract VotingMachine {
         l1ReceiverAddress = _l1Receiver;
     }
 
-function encodeList(bytes[] memory items) internal pure returns (bytes memory) {
-    bytes memory payload;
-    for (uint i = 0; i < items.length; i++) {
-        payload = bytes.concat(payload, items[i]);
-    }
-    return abi.encodePacked(encodeLength(payload.length, 192), payload);
-}
-
-function encodeLength(uint len, uint offset) internal pure returns (bytes memory) {
-    if (len < 56) {
-        return abi.encodePacked(uint8(len + offset));
-    } else {
-        uint lenLen;
-        uint i = len;
-        while (i != 0) {
-            lenLen++;
-            i = i >> 8;
+    function encodeList(bytes[] memory items) internal pure returns (bytes memory) {
+        bytes memory payload;
+        for (uint256 i = 0; i < items.length; i++) {
+            payload = bytes.concat(payload, items[i]);
         }
-
-        bytes memory b = new bytes(lenLen);
-        for (uint j = 0; j < lenLen; ++j) {
-            b[lenLen - 1 - j] = bytes1(uint8(len >> (8 * j)));
-        }
-
-        return abi.encodePacked(uint8(offset + 55 + lenLen), b);
+        return abi.encodePacked(encodeLength(payload.length, 192), payload);
     }
-}
 
+    function encodeLength(uint256 len, uint256 offset) internal pure returns (bytes memory) {
+        if (len < 56) {
+            return abi.encodePacked(uint8(len + offset));
+        } else {
+            uint256 lenLen;
+            uint256 i = len;
+            while (i != 0) {
+                lenLen++;
+                i = i >> 8;
+            }
+
+            bytes memory b = new bytes(lenLen);
+            for (uint256 j = 0; j < lenLen; ++j) {
+                b[lenLen - 1 - j] = bytes1(uint8(len >> (8 * j)));
+            }
+
+            return abi.encodePacked(uint8(offset + 55 + lenLen), b);
+        }
+    }
 
     function registerSnapshot(bytes32 proposalId, uint256 snapshotBlock) external {
         require(proposalSnapshots[proposalId] == 0, "Snapshot already set");
@@ -71,67 +70,58 @@ function encodeLength(uint len, uint offset) internal pure returns (bytes memory
     }
 
     function processStorageRoot(
-       address account,
-       uint256 blockNumber,
-       bytes memory blockHeaderRLP,
-       bytes[] memory accountProof
+        address account,
+        uint256 blockNumber,
+        bytes memory blockHeaderRLP,
+        bytes[] memory accountProof
     ) public {
-       bytes32 blockHash = blockhash(blockNumber);
-       require(blockHash != bytes32(0), "Blockhash not available");
+        bytes32 blockHash = blockhash(blockNumber);
+        require(blockHash != bytes32(0), "Blockhash not available");
 
-       bytes32 stateRoot = getStateRootFromHeader(blockHeaderRLP, blockHash);
-       bytes32 proofPath = keccak256(abi.encodePacked(account));
+        bytes32 stateRoot = getStateRootFromHeader(blockHeaderRLP, blockHash);
+        bytes32 proofPath = keccak256(abi.encodePacked(account));
 
-       // ✨ RLP-энкодим bytes[] в bytes
-       bytes memory encodedProof = encodeList(accountProof);
+        // ✨ RLP-энкодим bytes[] в bytes
+        bytes memory encodedProof = encodeList(accountProof);
 
-       // ✅ Используем TrieProofs.verify(...)
-       bytes memory accountRLP = TrieProofs.verify(
-          encodedProof,
-          stateRoot,
-          proofPath
-       );
+        // ✅ Используем TrieProofs.verify(...)
+        bytes memory accountRLP = TrieProofs.verify(encodedProof, stateRoot, proofPath);
 
-       RLP.RLPItem[] memory decoded = accountRLP.toRLPItem().toList();
-       bytes32 accountStorageRoot = bytes32(decoded[ACCOUNT_STORAGE_ROOT_INDEX].toUint());
+        RLP.RLPItem[] memory decoded = accountRLP.toRLPItem().toList();
+        bytes32 accountStorageRoot = bytes32(decoded[ACCOUNT_STORAGE_ROOT_INDEX].toUint());
 
-       storageRoots[account][blockNumber] = accountStorageRoot;
+        storageRoots[account][blockNumber] = accountStorageRoot;
     }
 
     function voteWithProof(
-       bytes32 proposalId,
-       uint256 snapshotBlock,
-       address token,
-       address voter,
-       uint256 slot,
-       bytes[] memory storageProof
+        bytes32 proposalId,
+        uint256 snapshotBlock,
+        address token,
+        address voter,
+        uint256 slot,
+        bytes[] memory storageProof
     ) external {
-       require(!hasVoted[proposalId][voter], "Already voted");
-       require(snapshotBlock == proposalSnapshots[proposalId], "Snapshot mismatch");
+        require(!hasVoted[proposalId][voter], "Already voted");
+        require(snapshotBlock == proposalSnapshots[proposalId], "Snapshot mismatch");
 
-       bytes32 storageRoot = storageRoots[token][snapshotBlock];
-       require(storageRoot != bytes32(0), "Storage root not available");
+        bytes32 storageRoot = storageRoots[token][snapshotBlock];
+        require(storageRoot != bytes32(0), "Storage root not available");
 
-       // 🔑 Вычисляем ключ для storage
-       bytes32 storageKey = keccak256(abi.encodePacked(slot));
+        // 🔑 Вычисляем ключ для storage
+        bytes32 storageKey = keccak256(abi.encodePacked(slot));
 
-       // ✨ Кодируем proof как RLP-список
-       bytes memory encodedProof = encodeList(storageProof);
+        // ✨ Кодируем proof как RLP-список
+        bytes memory encodedProof = encodeList(storageProof);
 
-       // ✅ Используем библиотеку Aragon
-       bytes memory value = TrieProofs.verify(
-          encodedProof,
-          storageRoot,
-          storageKey
-       );
+        // ✅ Используем библиотеку Aragon
+        bytes memory value = TrieProofs.verify(encodedProof, storageRoot, storageKey);
 
-       // 🗳️ Извлекаем голосовую силу (uint256)
-       uint256 power = value.toRLPItem().toUint();
+        // 🗳️ Извлекаем голосовую силу (uint256)
+        uint256 power = value.toRLPItem().toUint();
 
-       voteWeight[proposalId][voter] = power;
-       hasVoted[proposalId][voter] = true;
+        voteWeight[proposalId][voter] = power;
+        hasVoted[proposalId][voter] = true;
     }
-
 
     function relayResult(bytes32 proposalId, address[] calldata voters, uint256 gasLimit) external payable {
         uint256 total;
@@ -142,11 +132,7 @@ function encodeLength(uint len, uint offset) internal pure returns (bytes memory
         bytes memory payload = abi.encode(proposalId, total);
 
         IWormholeRelayer(wormholeRelayer).sendPayloadToEvm{value: msg.value}(
-            targetChainId,
-            l1ReceiverAddress,
-            payload,
-            0,
-            gasLimit
+            targetChainId, l1ReceiverAddress, payload, 0, gasLimit
         );
     }
 
@@ -155,5 +141,4 @@ function encodeLength(uint len, uint offset) internal pure returns (bytes memory
         RLP.RLPItem[] memory header = rlp.toRLPItem().toList();
         return bytes32(header[3].toUint());
     }
-
 }

@@ -1,4 +1,3 @@
-
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
@@ -30,13 +29,11 @@ contract GovernorRelay is IWormholeReceiver {
         _;
     }
 
-    function receiveWormholeMessages(
-        bytes memory payload,
-        bytes[] memory,
-        bytes32,
-        uint16,
-        bytes32
-    ) external override onlyWormhole {
+    function receiveWormholeMessages(bytes memory payload, bytes[] memory, bytes32, uint16, bytes32)
+        external
+        override
+        onlyWormhole
+    {
         (bytes32 proposalId, uint256 votePower) = abi.decode(payload, (bytes32, uint256));
         IGovernor(governor).finalizeCrosschainVotes(proposalId, votePower);
     }
