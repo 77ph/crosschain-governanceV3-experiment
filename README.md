@@ -12,6 +12,7 @@ This project demonstrates a proof-of-concept for a crosschain governance system,
 ## Quick Start
 
 ```bash
+tar -xvzf lib.tgz 
 forge build
 cd cli
 node governor-cli.js --help

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {RLPReader} from "./RLPReader.sol";
-import {MerklePatriciaProofVerifier} from "./MerklePatriciaProofVerifier.sol";
+import "aragon/packages/evm/contracts/lib/RLP.sol";
+import "aragon/packages/evm/contracts/lib/TrieProofs.sol";
 
 interface IWormholeRelayer {
     function sendPayloadToEvm(
@@ -15,9 +15,9 @@ interface IWormholeRelayer {
 }
 
 contract VotingMachine {
-    using RLPReader for bytes;
-    using RLPReader for RLPReader.RLPItem;
-    using RLPReader for RLPReader.RLPItem[];
+    using RLP for bytes;
+    using RLP for RLP.RLPItem;
+    using RLP for RLP.RLPItem[];
 
     mapping(address => mapping(uint256 => bytes32)) public storageRoots;
     mapping(bytes32 => mapping(address => bool)) public hasVoted;
@@ -36,60 +36,102 @@ contract VotingMachine {
         l1ReceiverAddress = _l1Receiver;
     }
 
+function encodeList(bytes[] memory items) internal pure returns (bytes memory) {
+    bytes memory payload;
+    for (uint i = 0; i < items.length; i++) {
+        payload = bytes.concat(payload, items[i]);
+    }
+    return abi.encodePacked(encodeLength(payload.length, 192), payload);
+}
+
+function encodeLength(uint len, uint offset) internal pure returns (bytes memory) {
+    if (len < 56) {
+        return abi.encodePacked(uint8(len + offset));
+    } else {
+        uint lenLen;
+        uint i = len;
+        while (i != 0) {
+            lenLen++;
+            i = i >> 8;
+        }
+
+        bytes memory b = new bytes(lenLen);
+        for (uint j = 0; j < lenLen; ++j) {
+            b[lenLen - 1 - j] = bytes1(uint8(len >> (8 * j)));
+        }
+
+        return abi.encodePacked(uint8(offset + 55 + lenLen), b);
+    }
+}
+
+
     function registerSnapshot(bytes32 proposalId, uint256 snapshotBlock) external {
         require(proposalSnapshots[proposalId] == 0, "Snapshot already set");
         proposalSnapshots[proposalId] = snapshotBlock;
     }
 
     function processStorageRoot(
-        address account,
-        uint256 blockNumber,
-        bytes memory blockHeaderRLP,
-        bytes memory accountStateProofRLP
+       address account,
+       uint256 blockNumber,
+       bytes memory blockHeaderRLP,
+       bytes[] memory accountProof
     ) public {
-        bytes32 blockHash = blockhash(blockNumber);
-        require(blockHash != bytes32(0), "Blockhash not available");
+       bytes32 blockHash = blockhash(blockNumber);
+       require(blockHash != bytes32(0), "Blockhash not available");
 
-        bytes32 stateRoot = getStateRootFromHeader(blockHeaderRLP, blockHash);
-        bytes32 proofPath = keccak256(abi.encodePacked(account));
+       bytes32 stateRoot = getStateRootFromHeader(blockHeaderRLP, blockHash);
+       bytes32 proofPath = keccak256(abi.encodePacked(account));
 
-        bytes memory accountRLP = MerklePatriciaProofVerifier.extractProofValue(
-            stateRoot,
-            proofPath,
-            accountStateProofRLP
-        );
+       // ✨ RLP-энкодим bytes[] в bytes
+       bytes memory encodedProof = encodeList(accountProof);
 
-        RLPReader.RLPItem[] memory decoded = accountRLP.toRLPItem().toList();
-        bytes32 accountStorageRoot = bytes32(decoded[ACCOUNT_STORAGE_ROOT_INDEX].toUint());
+       // ✅ Используем TrieProofs.verify(...)
+       bytes memory accountRLP = TrieProofs.verify(
+          encodedProof,
+          stateRoot,
+          proofPath
+       );
 
-        storageRoots[account][blockNumber] = accountStorageRoot;
+       RLP.RLPItem[] memory decoded = accountRLP.toRLPItem().toList();
+       bytes32 accountStorageRoot = bytes32(decoded[ACCOUNT_STORAGE_ROOT_INDEX].toUint());
+
+       storageRoots[account][blockNumber] = accountStorageRoot;
     }
 
     function voteWithProof(
-        bytes32 proposalId,
-        uint256 snapshotBlock,
-        address token,
-        address voter,
-        uint256 slot,
-        bytes memory storageProof
+       bytes32 proposalId,
+       uint256 snapshotBlock,
+       address token,
+       address voter,
+       uint256 slot,
+       bytes[] memory storageProof
     ) external {
-        require(!hasVoted[proposalId][voter], "Already voted");
-        require(snapshotBlock == proposalSnapshots[proposalId], "Snapshot mismatch");
+       require(!hasVoted[proposalId][voter], "Already voted");
+       require(snapshotBlock == proposalSnapshots[proposalId], "Snapshot mismatch");
 
-        bytes32 storageRoot = storageRoots[token][snapshotBlock];
-        require(storageRoot != bytes32(0), "Storage root not available");
+       bytes32 storageRoot = storageRoots[token][snapshotBlock];
+       require(storageRoot != bytes32(0), "Storage root not available");
 
-        bytes32 storageKey = keccak256(abi.encodePacked(slot));
-        bytes memory value = MerklePatriciaProofVerifier.extractProofValue(
-            storageRoot,
-            storageKey,
-            storageProof
-        );
+       // 🔑 Вычисляем ключ для storage
+       bytes32 storageKey = keccak256(abi.encodePacked(slot));
 
-        uint256 power = value.toRLPItem().toUint();
-        voteWeight[proposalId][voter] = power;
-        hasVoted[proposalId][voter] = true;
+       // ✨ Кодируем proof как RLP-список
+       bytes memory encodedProof = encodeList(storageProof);
+
+       // ✅ Используем библиотеку Aragon
+       bytes memory value = TrieProofs.verify(
+          encodedProof,
+          storageRoot,
+          storageKey
+       );
+
+       // 🗳️ Извлекаем голосовую силу (uint256)
+       uint256 power = value.toRLPItem().toUint();
+
+       voteWeight[proposalId][voter] = power;
+       hasVoted[proposalId][voter] = true;
     }
+
 
     function relayResult(bytes32 proposalId, address[] calldata voters, uint256 gasLimit) external payable {
         uint256 total;
@@ -110,7 +152,8 @@ contract VotingMachine {
 
     function getStateRootFromHeader(bytes memory rlp, bytes32 expectedHash) public pure returns (bytes32) {
         require(keccak256(rlp) == expectedHash, "Header hash mismatch");
-        RLPReader.RLPItem[] memory header = rlp.toRLPItem().toList();
+        RLP.RLPItem[] memory header = rlp.toRLPItem().toList();
         return bytes32(header[3].toUint());
     }
+
 }
